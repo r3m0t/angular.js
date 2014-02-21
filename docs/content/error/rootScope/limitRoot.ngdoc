@@ -1,0 +1,6 @@
+@ngdoc error
+@name $rootScope:limitRoot
+@fullName Can't limit root
+@description
+
+This error occurs when you've called {@link ng.$rootScope.Scope#methods_$digestLimit $digestLimit} on `$rootScope`. Limiters should be applied on child scopes to prevent strangeness.
