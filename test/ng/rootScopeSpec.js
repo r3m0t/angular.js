@@ -943,6 +943,81 @@ describe('Scope', function() {
 
   });
 
+  describe('$watch/$digest new', function () {
+    var first, middle, last, log;
+    beforeEach(inject(function($rootScope) {
+      log = '';
+
+      first = $rootScope.$new();
+      middle = $rootScope.$new();
+      last = $rootScope.$new();
+    }));
+
+    it('should not allow digestLimit on rootScope', inject(function($rootScope) {
+      expect(function() {
+        $rootScope.$digestLimit(function() { return 0; });
+      }).toThrow();
+    }));
+
+    it('should run watches at least once', inject(function ($rootScope) {
+      first.$watch(function () { log += '1'; });
+      first.$digestLimit(function () { return 0; });
+
+      $rootScope.$digest();
+      expect(log).toEqual('1');
+
+      log = '';
+      $rootScope.$digest();
+      expect(log).toEqual('');
+
+      first.$digestLimit(function () { return 1; });
+
+      log = '';
+      $rootScope.$digest();
+      expect(log).toEqual('1');
+    }));
+
+    it('should skip children but not siblings', inject(function ($rootScope) {
+      var child = first.$new();
+      first.$watch(function () { log += '1'; });
+      child.$watch(function () { log += '2'; });
+      middle.$watch(function () { log += '3'; });
+
+      $rootScope.$digest();
+
+      first.$digestLimit(function () { return 0; });
+
+      log = '';
+      $rootScope.$digest();
+      expect(log).toEqual('123');
+
+      log = '';
+      $rootScope.$digest();
+      expect(log).toEqual('3');
+    }));
+
+    it('should re-run when Limit changes value', inject(function ($rootScope) {
+      var child = first.$new();
+      first.$watch(function () { log += '1'; });
+      child.$watch(function () { log += '2'; });
+      first.$digestLimit('time');
+      first.time = 0;
+
+      $rootScope.$digest();
+      expect(log).toEqual('12');
+
+      log = '';
+      $rootScope.$digest();
+      expect(log).toEqual('');
+
+      first.time += 1;
+
+      log = '';
+      $rootScope.$digest();
+      expect(log).toEqual('12');
+    }));
+  });
+
   describe('$destroy', function() {
     var first = null, middle = null, last = null, log = null;
 
