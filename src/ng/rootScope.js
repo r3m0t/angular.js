@@ -195,7 +195,7 @@ function $RootScopeProvider(){
         child.$$listeners = {};
         child.$$listenerCount = {};
         child.$parent = this;
-        child.$$watchers = child.$$nextSibling = child.$$childHead = child.$$childTail = null;
+        child.$$watchers = child.$$digestLimits = child.$$nextSibling = child.$$childHead = child.$$childTail = null;
         child.$$prevSibling = this.$$childTail;
         if (this.$$childHead) {
           this.$$childTail.$$nextSibling = child;
@@ -357,6 +357,68 @@ function $RootScopeProvider(){
         };
       },
 
+      /**
+       * @ngdoc function
+       * @name ng.$rootScope.Scope#$digestLimit
+       * @methodOf ng.$rootScope.Scope
+       * @function
+       *
+       * @description
+       * By default, all the watchers are called every time {@link ng.$rootScope.Scope#methods_$digest $digest}
+       * is called. Adding limiters with this function means watchers will only be called when the
+       * return value of any limiter changes.
+       *
+       * If no return value of any limiter changes, then the watchers will be skipped, as well as all the
+       * child scopes (both their watchers and their limiters).
+       *
+       * This can't be done on the `$rootScope`.
+       *
+       * @param {(function()|string)} watchExpression Expression that is evaluated on each
+       *    {@link ng.$rootScope.Scope#methods_$digest $digest} cycle. No change in return value causes
+       *    the watches to be skipped.
+       *
+       *    - `string`: Evaluated as {@link guide/expression expression}
+       *    - `function(scope)`: called with current `scope` as a parameter.
+       *
+       * @param {boolean=} objectEquality Compare object for equality rather than for reference.
+       * @returns {function()} Returns a deregistration function for this limiter.
+       */
+      $digestLimit: function(watchExp, objectEquality) {
+        if (this === this.$root) { throw $rootScopeMinErr('limitRoot',
+                'Can\'t limit root'); }
+
+        var scope = this,
+            get = compileToFn(watchExp, 'watch'),
+            array = scope.$$digestLimits,
+            watcher = {
+              last: initWatchVal,
+              get: get,
+              exp: watchExp,
+              eq: !!objectEquality
+            };
+
+        lastDirtyWatch = null;
+
+        if (typeof watchExp == 'string' && get.constant) {
+          var originalFn = watcher.fn;
+          watcher.fn = function(newVal, oldVal, scope) {
+            originalFn.call(this, newVal, oldVal, scope);
+            arrayRemove(array, watcher);
+          };
+        }
+
+        if (!array) {
+          array = scope.$$digestLimits = [];
+        }
+        // we use unshift since we use a while loop in $digest for speed.
+        // the while loop reads in reverse order.
+        array.unshift(watcher);
+
+        return function() {
+          arrayRemove(array, watcher);
+          lastDirtyWatch = null;
+        };
+      },
 
       /**
        * @ngdoc function
@@ -548,11 +610,11 @@ function $RootScopeProvider(){
        */
       $digest: function() {
         var watch, value, last,
-            watchers,
+            digestLimits, watchers,
             asyncQueue = this.$$asyncQueue,
             postDigestQueue = this.$$postDigestQueue,
             length,
-            dirty, ttl = TTL,
+            dirty, limited = false, ttl = TTL,
             next, current, target = this,
             watchLog = [],
             logIdx, logMsg, asyncTask;
@@ -578,7 +640,34 @@ function $RootScopeProvider(){
 
           traverseScopesLoop:
           do { // "traverse the scopes" loop
-            if ((watchers = current.$$watchers)) {
+            if ((digestLimits = current.$$digestLimits)) {
+              limited = true;
+              length = digestLimits.length;
+              while (length--) {
+                try {
+                  watch = digestLimits[length];
+                  // Most common watches are on primitives, in which case we can short
+                  // circuit it with === operator, only when === fails do we use .equals
+                  if (watch) {
+                    if ((value = watch.get(current)) !== (last = watch.last) &&
+                        !(watch.eq
+                            ? equals(value, last)
+                            : (typeof value == 'number' && typeof last == 'number'
+                               && isNaN(value) && isNaN(last)))) {
+                      limited = false;
+                      watch.last = watch.eq ? copy(value) : value;
+                    }
+                  }
+                } catch (e) {
+                  clearPhase();
+                  $exceptionHandler(e);
+                }
+              }
+            } else {
+              limited = false;
+            }
+
+            if (!limited && (watchers = current.$$watchers)) {
               // process our watches
               length = watchers.length;
               while (length--) {
@@ -622,7 +711,7 @@ function $RootScopeProvider(){
             // Insanity Warning: scope depth-first traversal
             // yes, this code is a bit crazy, but it works and we have tests to prove it!
             // this piece should be kept in sync with the traversal in $broadcast
-            if (!(next = (current.$$childHead ||
+            if (!(next = ((!limited && current.$$childHead) ||
                 (current !== target && current.$$nextSibling)))) {
               while(current !== target && !(next = current.$$nextSibling)) {
                 current = current.$parent;
